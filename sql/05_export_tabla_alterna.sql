@@ -15,6 +15,11 @@ DECLARE p_corte DATE DEFAULT @p_corte;
 DECLARE v_resp  BOOL DEFAULT @respetar_diamante_base;
 DECLARE v_comp  BOOL DEFAULT @completar_con_oficial;
 DECLARE v_grupo BOOL DEFAULT @derivar_boca_por_grupo;
+DECLARE v_bhist BOOL DEFAULT @boca_desde_historico;
+DECLARE p_hist  DATE DEFAULT DATE_SUB(p_corte, INTERVAL 1 MONTH);   -- ultimo mes de la ventana (igual que el paso 01)
+-- boca_desde_historico = TRUE: cod_boca_salida de las filas que vienen de la estrategica o de la oficial se REEMPLAZA por la boca
+--   de cr_cliente_dex_historico en p_hist (grupo vs2; GO/MM/AB/Sin asignar -> BO) cuando el cliente esta en el historico.
+--   Si no esta, se conserva la de la fuente. Las filas derivadas (clientes nuevos) ya salen del grupo del paso 01.
 -- derivar_boca_por_grupo = TRUE: clientes segmentados que no estan ni en la tabla estrategica ni en la oficial (clientes nuevos)
 --   se agregan con cod_boca_salida derivado de su grupo de precio (vs2; GO -> BO) y segmento estrategico vacio.
 --   Regla validada contra la tabla estrategica: coincide en ~99.8% de los clientes que tienen ambos datos.
@@ -31,6 +36,15 @@ CREATE TEMP TABLE oficial_tx AS (
   )
   WHERE dex IS NOT NULL
   GROUP BY dex
+);
+
+CREATE TEMP TABLE boca_hist AS (
+  SELECT
+    SAFE_CAST(cod_cliente_dex AS INT64) AS dex,
+    `{{ ds }}.fn_vs2`(ARRAY_AGG(cod_grupo_precio_dex IGNORE NULLS ORDER BY periodo DESC, cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)]) AS boca
+  FROM `{{ src_cliente_dex_hist }}`
+  WHERE v_bhist AND DATE_TRUNC(periodo, MONTH) = p_hist
+  GROUP BY 1
 );
 
 CREATE TEMP TABLE base AS (
@@ -75,13 +89,23 @@ CREATE TEMP TABLE base AS (
     FROM `{{ ds }}.seg_segmentacion` s
     WHERE v_grupo AND s.fecha_corte = p_corte AND s.cod_grupo_precio_dex_vs2 IS NOT NULL
   )
-  SELECT * FROM ft
-  UNION ALL
-  SELECT * FROM fo WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fo.dex)
-  UNION ALL
-  SELECT * FROM fg
-  WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fg.dex)
-    AND NOT EXISTS (SELECT 1 FROM fo WHERE fo.dex = fg.dex)
+  , todo AS (
+    SELECT * FROM ft
+    UNION ALL
+    SELECT * FROM fo WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fo.dex)
+    UNION ALL
+    SELECT * FROM fg
+    WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fg.dex)
+      AND NOT EXISTS (SELECT 1 FROM fo WHERE fo.dex = fg.dex)
+  )
+  -- DISTINCT: la estrategica puede traer varias bocas por cliente; al unificar con el historico quedarian filas repetidas
+  SELECT DISTINCT
+    t.periodo, t.cod_interlocutor,
+    COALESCE(IF(t.origen_base = 'derivada', NULL, h.boca), t.cod_boca_salida) AS cod_boca_salida,
+    t.des_segmento_transaccional, t.des_segmento_estrategica, t.dex, t.origen_base,
+    t.cod_boca_salida AS cod_boca_fuente
+  FROM todo t
+  LEFT JOIN boca_hist h ON h.dex = t.dex
 );
 
 CREATE TEMP TABLE seg AS (
@@ -119,6 +143,7 @@ SELECT
   COUNTIF(b.origen_base = 'estrategica' AND b.des_segmento_transaccional = '0 Diamante') AS n_diamante_base_estrategica,
   COUNTIF(b.origen_base = 'oficial')                          AS n_filas_de_oficial,
   COUNTIF(b.origen_base = 'derivada')                         AS n_filas_derivadas,
+  COUNTIF(b.origen_base <> 'derivada' AND b.cod_boca_salida IS DISTINCT FROM b.cod_boca_fuente) AS n_boca_actualizada,
   (SELECT COUNTIF(des_segmento_transaccional = '0 Diamante')
      FROM `{{ out_tabla_alterna }}` WHERE periodo = p_corte)  AS n_diamante_final,
   (SELECT COUNTIF(des_segmento_transaccional IS NULL)
