@@ -19,7 +19,8 @@ DECLARE v_bhist BOOL DEFAULT @boca_desde_historico;
 DECLARE p_hist  DATE DEFAULT DATE_SUB(p_corte, INTERVAL 1 MONTH);   -- ultimo mes de la ventana (igual que el paso 01)
 -- boca_desde_historico = TRUE: cod_boca_salida de las filas que vienen de la estrategica o de la oficial se REEMPLAZA por la boca
 --   de cr_cliente_dex_historico en p_hist (grupo vs2; GO/MM/AB/Sin asignar -> BO) cuando el cliente esta en el historico.
---   Si no esta, se conserva la de la fuente. Las filas derivadas (clientes nuevos) ya salen del grupo del paso 01.
+--   Si no esta, se conserva la de la fuente.
+--   Los clientes cuya boca en el historico NO es segmentable (MA, FA, PI, OT) se EXCLUYEN de la tabla alterna: salieron de la segmentacion. Las filas derivadas (clientes nuevos) ya salen del grupo del paso 01.
 -- derivar_boca_por_grupo = TRUE: clientes segmentados que no estan ni en la tabla estrategica ni en la oficial (clientes nuevos)
 --   se agregan con cod_boca_salida derivado de su grupo de precio (vs2; GO -> BO) y segmento estrategico vacio.
 --   Regla validada contra la tabla estrategica: coincide en ~99.8% de los clientes que tienen ambos datos.
@@ -57,13 +58,9 @@ CREATE TEMP TABLE boca_hist AS (
   LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(h0.cod_cliente_dex AS INT64)
   WHERE v_bhist AND DATE_TRUNC(h0.periodo, MONTH) = p_hist
   GROUP BY 1
-  -- solo bocas segmentables; MA, FA, PI, OT conservan la boca de la fuente (pendiente de definir su tratamiento)
-  HAVING UPPER(`{{ ds }}.fn_vs2`(ARRAY_AGG(h0.cod_grupo_precio_dex IGNORE NULLS
-                ORDER BY IF(mn.cod_cliente_dex IS NULL, 0, 1), h0.periodo DESC, h0.cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)]))
-         IN ('BO','PM','GA','PA','LV')
 );
 
-CREATE TEMP TABLE base AS (
+CREATE TEMP TABLE base_all AS (
   WITH
   ft0 AS (
     SELECT
@@ -123,9 +120,15 @@ CREATE TEMP TABLE base AS (
     t.periodo, t.cod_interlocutor,
     COALESCE(IF(t.origen_base = 'derivada', NULL, h.boca), t.cod_boca_salida) AS cod_boca_salida,
     t.des_segmento_transaccional, t.des_segmento_estrategica, t.dex, t.origen_base,
-    t.cod_boca_salida AS cod_boca_fuente
+    t.cod_boca_salida AS cod_boca_fuente,
+    -- fuera de alcance: su boca actual (historico) no es segmentable (MA, FA, PI, OT) -> no entra a la tabla alterna
+    COALESCE(UPPER(h.boca) NOT IN ('BO','PM','GA','PA','LV'), FALSE) AS fuera_alcance
   FROM todo t
   LEFT JOIN boca_hist h ON h.dex = t.dex
+);
+
+CREATE TEMP TABLE base AS (
+  SELECT * EXCEPT (fuera_alcance) FROM base_all WHERE NOT fuera_alcance
 );
 
 CREATE TEMP TABLE seg AS (
@@ -163,6 +166,7 @@ SELECT
   COUNTIF(b.origen_base = 'estrategica' AND b.des_segmento_transaccional = '0 Diamante') AS n_diamante_base_estrategica,
   COUNTIF(b.origen_base = 'oficial')                          AS n_filas_de_oficial,
   COUNTIF(b.origen_base = 'derivada')                         AS n_filas_derivadas,
+  (SELECT COUNT(*) FROM base_all WHERE fuera_alcance)         AS n_excluidas_boca_no_segmentable,
   COUNTIF(b.origen_base <> 'derivada' AND b.cod_boca_salida IS DISTINCT FROM b.cod_boca_fuente) AS n_boca_actualizada,
   (SELECT COUNTIF(des_segmento_transaccional = '0 Diamante')
      FROM `{{ out_tabla_alterna }}` WHERE periodo = p_corte)  AS n_diamante_final,
