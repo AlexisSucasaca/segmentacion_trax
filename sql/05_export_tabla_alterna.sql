@@ -103,13 +103,18 @@ CREATE TEMP TABLE base_all AS (
     SELECT
       p_corte AS periodo,
       LPAD(CAST(s.cod_cliente_dex AS STRING), 10, '0') AS cod_interlocutor,
-      IF(s.cod_grupo_precio_dex_vs2 = 'GO', 'BO', s.cod_grupo_precio_dex_vs2) AS cod_boca_salida,
-      CAST(NULL AS STRING) AS des_segmento_transaccional,
+      -- boca: la del grupo del paso 01; los previos sin datos en la ventana (sin grupo) usan la del historico
+      COALESCE(IF(s.cod_grupo_precio_dex_vs2 = 'GO', 'BO', s.cod_grupo_precio_dex_vs2), bh.boca) AS cod_boca_salida,
+      -- segmento base: el de la oficial (si el cliente estaba en ella; p.ej. un Diamante previo que ya no esta en la estrategica)
+      o.tx AS des_segmento_transaccional,
       CAST(NULL AS STRING) AS des_segmento_estrategica,
       s.cod_cliente_dex AS dex,
       'derivada' AS origen_base
     FROM `{{ ds }}.seg_segmentacion` s
-    WHERE v_grupo AND s.fecha_corte = p_corte AND s.cod_grupo_precio_dex_vs2 IS NOT NULL
+    LEFT JOIN boca_hist bh  ON bh.dex = s.cod_cliente_dex
+    LEFT JOIN oficial_tx o  ON o.dex  = s.cod_cliente_dex
+    WHERE v_grupo AND s.fecha_corte = p_corte
+      AND COALESCE(s.cod_grupo_precio_dex_vs2, bh.boca) IS NOT NULL
   )
   , todo AS (
     SELECT * FROM ft
@@ -139,9 +144,7 @@ CREATE TEMP TABLE base AS (
 CREATE TEMP TABLE seg AS (
   SELECT
     cod_cliente_dex,
-    IF(des_segmentacion_transaccional = 'Sin asignar', 'Por definir', des_segmentacion_transaccional) AS seg_tx,
-    -- segmento regular (sin el overlay Diamante): respaldo cuando un Diamante nuestro no esta en la lista de la oficial y no hay valor base
-    IF(des_segmento_regular = 'Sin asignar', 'Por definir', des_segmento_regular) AS seg_reg
+    IF(des_segmentacion_transaccional = 'Sin asignar', 'Por definir', des_segmentacion_transaccional) AS seg_tx
   FROM `{{ ds }}.seg_segmentacion`
   WHERE fecha_corte = p_corte
 );
@@ -156,7 +159,7 @@ SELECT
   b.cod_boca_salida,
   CASE
     WHEN v_resp AND b.des_segmento_transaccional = '0 Diamante' THEN '0 Diamante'
-    WHEN v_resp AND s.seg_tx = '0 Diamante'                     THEN COALESCE(b.des_segmento_transaccional, s.seg_reg)
+    WHEN v_resp AND s.seg_tx = '0 Diamante'                     THEN COALESCE(b.des_segmento_transaccional, s.seg_tx)   -- sin valor base: se mantiene el Diamante (historia)
     ELSE COALESCE(s.seg_tx, b.des_segmento_transaccional, IF(p_base <> p_corte, 'Por definir', NULL))
   END,
   b.des_segmento_estrategica
