@@ -2,6 +2,9 @@
 -- Cada codigo del nodo se resuelve a cod_cliente_dex_actual (vigente); todo el pipeline usa ese codigo como cliente unico.
 -- Se toma la fila mas reciente por cod_cliente_dex con periodo <= p_corte (hoy cada codigo aparece una sola vez).
 -- Con unificar_nodos = FALSE la tabla del corte queda vacia y el pipeline se comporta como antes.
+-- Solo fusionan las filas con un codigo actual numerico (hoy: tip_clasificacion = 'cambio razon social').
+--   Las de tip_clasificacion = 'clientes misma cadena' traen cod_cliente_dex_actual = 'Sin Asignar' (no es un codigo):
+--   SAFE_CAST lo vuelve NULL y se descartan; esos clientes siguen siendo independientes en la segmentacion.
 -- Solo se guardan los codigos que cambian de llave (cod <> actual); los demas se resuelven por COALESCE.
 DECLARE p_corte DATE DEFAULT @p_corte;
 DECLARE v_unif  BOOL DEFAULT @unificar_nodos;
