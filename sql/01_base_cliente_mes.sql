@@ -77,8 +77,8 @@ CREATE TEMP TABLE des_por_cod AS (
 
 -- Boca por cliente:
 --   v_hist = TRUE : la del historico en el ULTIMO mes de la ventana (p_hist = p_corte - 1 mes);
---                   si el cliente no esta en el historico ese mes, o su boca ahi no es un grupo segmentable
---                   (p.ej. MA, FA, PI, OT), la de su ultima venta.
+--                   si el cliente no esta en el historico ese mes, la de su ultima venta.
+--                   Si su boca en el historico no es segmentable (MA, FA, PI, OT) el filtro final lo deja FUERA de la segmentacion.
 --   v_hist = FALSE: la de su ultima venta (regla anterior).
 CREATE TEMP TABLE grupo_src AS (
   WITH
@@ -109,8 +109,8 @@ CREATE TEMP TABLE grupo_src AS (
     u.sap_ult,
     u.g.cod AS cod_ult,
     h.cod   AS cod_hist,
-    IF(v_hist AND UPPER(h.cod) IN ('BO','MM','AB','SIN ASIGNAR','PM','GA','PA','LV','GO'), h.cod, u.g.cod) AS cod_final,
-    IF(IF(v_hist AND UPPER(h.cod) IN ('BO','MM','AB','SIN ASIGNAR','PM','GA','PA','LV','GO'), h.cod, u.g.cod) = u.g.cod, u.g.des,
+    IF(v_hist, COALESCE(h.cod, u.g.cod), u.g.cod) AS cod_final,
+    IF(IF(v_hist, COALESCE(h.cod, u.g.cod), u.g.cod) = u.g.cod, u.g.des,
        COALESCE(d.des, h.cod)) AS des_final
   FROM ultimo u
   LEFT JOIN hist h        ON h.cod_cliente_dex = u.cod_cliente_dex
@@ -186,7 +186,7 @@ SELECT n_ratios, vb_out, vb_base, n_clientes, n_dex_multi_sap, n_dex_sap_dif_dim
 FROM (
   SELECT
     (SELECT COUNTIF(cod_hist IS NULL) FROM grupo_src) AS n_dex_sin_hist,
-    -- boca del historico fuera de los grupos segmentables (MA, FA, PI, OT...): se usa la de la ultima venta
+    -- clientes con boca del historico fuera de los grupos segmentables (MA, FA, PI, OT...): quedan fuera de la segmentacion
     (SELECT COUNTIF(cod_hist IS NOT NULL AND UPPER(cod_hist) NOT IN ('BO','MM','AB','SIN ASIGNAR','PM','GA','PA','LV','GO')) FROM grupo_src) AS n_dex_hist_no_segmentable,
     -- clientes cuya boca (vs2) del historico difiere de la de su ultima venta (mide el impacto del cambio de regla)
     (SELECT COUNTIF(cod_hist IS NOT NULL AND UPPER(cod_hist) IN ('BO','MM','AB','SIN ASIGNAR','PM','GA','PA','LV','GO') AND `{{ ds }}.fn_vs2`(cod_hist) IS DISTINCT FROM `{{ ds }}.fn_vs2`(cod_ult)) FROM grupo_src) AS n_dex_boca_hist_dif_venta,

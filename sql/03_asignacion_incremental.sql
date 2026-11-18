@@ -112,7 +112,12 @@ SELECT
   s.cod_boca_ant, s.tipo_cambio
 FROM prev p
 LEFT JOIN scored s ON s.cod_cliente_dex = p.cod_cliente_dex
-WHERE s.cod_cliente_dex IS NULL
+WHERE (s.cod_cliente_dex IS NULL
+       -- fuera de alcance: su boca actual (historico) no es segmentable (MA, FA, PI, OT) -> no se arrastra la segmentacion previa
+       AND NOT EXISTS (SELECT 1 FROM cambios c
+                       WHERE c.cod_cliente_dex = p.cod_cliente_dex
+                         AND c.cod_boca_act IS NOT NULL
+                         AND UPPER(c.cod_vs2_act) NOT IN ('BO','PM','GA','PA','LV','GO')))
    OR (v_solo AND p.des_segmentacion_transaccional <> 'Sin asignar' AND NOT s.reeval_boca_f)
 
 UNION ALL
@@ -156,6 +161,12 @@ SELECT
   COUNTIF(des_segmentacion_transaccional IS NULL)          AS n_sin_segmento,
   COUNTIF(origen = 'Previo')               AS n_previo,
   COUNTIF(origen = 'Reevaluado')           AS n_reevaluado,
+  -- previos que salen de la segmentacion por tener boca no segmentable (MA, FA, PI, OT)
+  (SELECT COUNT(*) FROM prev p
+    WHERE EXISTS (SELECT 1 FROM cambios c
+                  WHERE c.cod_cliente_dex = p.cod_cliente_dex AND c.cod_boca_act IS NOT NULL
+                    AND UPPER(c.cod_vs2_act) NOT IN ('BO','PM','GA','PA','LV','GO'))
+      AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.cod_cliente_dex = p.cod_cliente_dex)) AS n_fuera_alcance,
   COUNTIF(origen = 'Reevaluado cambio boca') AS n_reevaluado_cambio_boca,
   COUNTIF(tipo_cambio_boca = 'CAMBIO_UNIVERSO') AS n_cambio_universo,
   COUNTIF(tipo_cambio_boca = 'CAMBIO_INTERNO')  AS n_cambio_interno,
