@@ -82,7 +82,8 @@ CREATE TEMP TABLE base_all AS (
       a.periodo, a.cod_interlocutor, a.cod_boca_salida,
       o.tx AS des_segmento_transaccional,
       a.des_segmento_estrategica, COALESCE(mn.cod_cliente_dex_actual, a.dex) AS dex,
-      'estrategica' AS origen_base
+      'estrategica' AS origen_base,
+      a.dex AS dex_raw   -- codigo original (sin unificar por nodo)
     FROM ft0 a
     LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = a.dex
     LEFT JOIN oficial_tx o ON o.dex = COALESCE(mn.cod_cliente_dex_actual, a.dex)
@@ -93,7 +94,8 @@ CREATE TEMP TABLE base_all AS (
       y.des_segmento_transaccional, y.des_segmento_estrategica,
       COALESCE(mn.cod_cliente_dex_actual,
                SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)) AS dex,
-      'oficial' AS origen_base
+      'oficial' AS origen_base,
+      SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64) AS dex_raw
     FROM `{{ src_prev_oficial }}` y
     LEFT JOIN mapa_nodo mn
       ON mn.cod_cliente_dex = SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)
@@ -109,7 +111,8 @@ CREATE TEMP TABLE base_all AS (
       o.tx AS des_segmento_transaccional,
       CAST(NULL AS STRING) AS des_segmento_estrategica,
       s.cod_cliente_dex AS dex,
-      'derivada' AS origen_base
+      'derivada' AS origen_base,
+      s.cod_cliente_dex AS dex_raw
     FROM `{{ ds }}.seg_segmentacion` s
     LEFT JOIN boca_hist bh  ON bh.dex = s.cod_cliente_dex
     LEFT JOIN oficial_tx o  ON o.dex  = s.cod_cliente_dex
@@ -121,9 +124,10 @@ CREATE TEMP TABLE base_all AS (
     UNION ALL
     SELECT * FROM fo WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fo.dex)
     UNION ALL
+    -- se compara por codigo ORIGINAL: si la estrategica solo trae el codigo viejo de un nodo, el codigo actual igual entra (derivado)
     SELECT * FROM fg
-    WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex = fg.dex)
-      AND NOT EXISTS (SELECT 1 FROM fo WHERE fo.dex = fg.dex)
+    WHERE NOT EXISTS (SELECT 1 FROM ft WHERE ft.dex_raw = fg.dex_raw)
+      AND NOT EXISTS (SELECT 1 FROM fo WHERE fo.dex_raw = fg.dex_raw)
   )
   -- DISTINCT: la estrategica puede traer varias bocas por cliente; al unificar con el historico quedarian filas repetidas
   SELECT DISTINCT
