@@ -57,6 +57,10 @@ CREATE TEMP TABLE boca_hist AS (
   LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(h0.cod_cliente_dex AS INT64)
   WHERE v_bhist AND DATE_TRUNC(h0.periodo, MONTH) = p_hist
   GROUP BY 1
+  -- solo bocas segmentables; MA, FA, PI, OT conservan la boca de la fuente (pendiente de definir su tratamiento)
+  HAVING UPPER(`{{ ds }}.fn_vs2`(ARRAY_AGG(h0.cod_grupo_precio_dex IGNORE NULLS
+                ORDER BY IF(mn.cod_cliente_dex IS NULL, 0, 1), h0.periodo DESC, h0.cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)]))
+         IN ('BO','PM','GA','PA','LV')
 );
 
 CREATE TEMP TABLE base AS (

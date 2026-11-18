@@ -62,13 +62,14 @@ base_scored AS (
     d.min_diamante,
     c.cod_boca_ant,
     c.tipo_cambio,
-    (c.tipo_cambio = 'CAMBIO_UNIVERSO'
+    (UPPER(c.cod_vs2_act) IN ('BO','PM','GA','PA','LV','GO')   -- boca nueva segmentable (MA, FA, PI, OT no se reevaluan)
+     AND (c.tipo_cambio = 'CAMBIO_UNIVERSO'
      OR (c.tipo_cambio = 'CAMBIO_INTERNO'
          AND c.cod_vs2_ant IS DISTINCT FROM c.cod_vs2_act
          AND NOT (    ua.min_oro_plus IS NOT DISTINCT FROM u.min_oro_plus
                   AND ua.min_oro     IS NOT DISTINCT FROM u.min_oro
                   AND ua.min_plata   IS NOT DISTINCT FROM u.min_plata
-                  AND ua.min_bronce  IS NOT DISTINCT FROM u.min_bronce))
+                  AND ua.min_bronce  IS NOT DISTINCT FROM u.min_bronce)))
     ) AS reeval_boca
   FROM nuevo n
   LEFT JOIN umb u
