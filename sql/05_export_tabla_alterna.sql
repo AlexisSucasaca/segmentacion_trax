@@ -139,7 +139,9 @@ CREATE TEMP TABLE base AS (
 CREATE TEMP TABLE seg AS (
   SELECT
     cod_cliente_dex,
-    IF(des_segmentacion_transaccional = 'Sin asignar', 'Por definir', des_segmentacion_transaccional) AS seg_tx
+    IF(des_segmentacion_transaccional = 'Sin asignar', 'Por definir', des_segmentacion_transaccional) AS seg_tx,
+    -- segmento regular (sin el overlay Diamante): respaldo cuando un Diamante nuestro no esta en la lista de la oficial y no hay valor base
+    IF(des_segmento_regular = 'Sin asignar', 'Por definir', des_segmento_regular) AS seg_reg
   FROM `{{ ds }}.seg_segmentacion`
   WHERE fecha_corte = p_corte
 );
@@ -154,7 +156,7 @@ SELECT
   b.cod_boca_salida,
   CASE
     WHEN v_resp AND b.des_segmento_transaccional = '0 Diamante' THEN '0 Diamante'
-    WHEN v_resp AND s.seg_tx = '0 Diamante'                     THEN b.des_segmento_transaccional
+    WHEN v_resp AND s.seg_tx = '0 Diamante'                     THEN COALESCE(b.des_segmento_transaccional, s.seg_reg)
     ELSE COALESCE(s.seg_tx, b.des_segmento_transaccional, IF(p_base <> p_corte, 'Por definir', NULL))
   END,
   b.des_segmento_estrategica
