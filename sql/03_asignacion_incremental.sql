@@ -157,16 +157,27 @@ WHERE NOT EXISTS (SELECT 1 FROM prev p WHERE p.cod_cliente_dex = s.cod_cliente_d
 
 SELECT
   COUNT(*) AS n_filas,
-  (SELECT COUNT(*) FROM `{{ prev_tabla }}` WHERE fecha_corte = p_prev) AS n_filas_prev,
+  -- previa a cliente unico (los codigos de un mismo nodo cuentan una vez), para que la compuerta sea comparable
+  (SELECT COUNT(DISTINCT COALESCE(mn.cod_cliente_dex_actual, p.cod_cliente_dex))
+     FROM `{{ prev_tabla }}` p
+     LEFT JOIN `{{ ds }}.seg_mapa_nodo` mn
+       ON mn.fecha_corte = p_corte AND mn.cod_cliente_dex = p.cod_cliente_dex
+    WHERE p.fecha_corte = p_prev) AS n_filas_prev,
   COUNTIF(des_segmentacion_transaccional IS NULL)          AS n_sin_segmento,
   COUNTIF(origen = 'Previo')               AS n_previo,
   COUNTIF(origen = 'Reevaluado')           AS n_reevaluado,
-  -- previos que salen de la segmentacion por tener boca no segmentable (MA, FA, PI, OT)
-  (SELECT COUNT(*) FROM prev p
-    WHERE EXISTS (SELECT 1 FROM cambios c
-                  WHERE c.cod_cliente_dex = p.cod_cliente_dex AND c.cod_boca_act IS NOT NULL
+  -- previos (cliente unico) que salen de la segmentacion por tener boca no segmentable (MA, FA, PI, OT)
+  (SELECT COUNT(DISTINCT k.dex)
+     FROM (SELECT COALESCE(mn.cod_cliente_dex_actual, p.cod_cliente_dex) AS dex
+             FROM `{{ prev_tabla }}` p
+             LEFT JOIN `{{ ds }}.seg_mapa_nodo` mn
+               ON mn.fecha_corte = p_corte AND mn.cod_cliente_dex = p.cod_cliente_dex
+            WHERE p.fecha_corte = p_prev) k
+    WHERE EXISTS (SELECT 1 FROM `{{ ds }}.seg_cambios_boca` c
+                  WHERE c.fecha_corte = p_corte AND c.cod_cliente_dex = k.dex AND c.cod_boca_act IS NOT NULL
                     AND UPPER(c.cod_vs2_act) NOT IN ('BO','PM','GA','PA','LV','GO'))
-      AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.cod_cliente_dex = p.cod_cliente_dex)) AS n_fuera_alcance,
+      AND NOT EXISTS (SELECT 1 FROM `{{ ds }}.seg_resumen_cliente` r
+                      WHERE r.fecha_corte = p_corte AND r.cod_cliente_dex = k.dex)) AS n_fuera_alcance,
   COUNTIF(origen = 'Reevaluado cambio boca') AS n_reevaluado_cambio_boca,
   COUNTIF(tipo_cambio_boca = 'CAMBIO_UNIVERSO') AS n_cambio_universo,
   COUNTIF(tipo_cambio_boca = 'CAMBIO_INTERNO')  AS n_cambio_interno,
