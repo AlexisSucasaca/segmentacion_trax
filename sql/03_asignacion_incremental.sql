@@ -14,6 +14,9 @@ DECLARE p_corte DATE DEFAULT @p_corte;
 DECLARE p_prev  DATE DEFAULT @p_prev;
 DECLARE p_umb   DATE DEFAULT @p_umb;
 DECLARE v_solo  BOOL DEFAULT @solo_sin_asignar;
+-- sin_umbral_conservar = TRUE: un cliente cuya (boca, SAP) no tiene umbrales en el FULL NO se asigna por la funcion (que lo mandaria a Bronce):
+--   conserva su segmento previo y, si no tenia (nuevo o 'Sin asignar'), queda 'Sin asignar'.
+DECLARE v_cons  BOOL DEFAULT @sin_umbral_conservar;
 
 DELETE FROM `{{ ds }}.seg_segmentacion` WHERE fecha_corte = p_corte;
 
@@ -60,6 +63,7 @@ base_scored AS (
        `{{ ds }}.fn_asignar_seg`(n.sum_ub_ajustada, u.min_oro_plus, u.min_oro, u.min_plata, u.min_bronce)
     ) AS seg_regular,
     d.min_diamante,
+    (u.cod_cliente_alicorp_actual IS NULL AND n.sin_asignar <> 'Sin asignar') AS sin_umbral,
     c.cod_boca_ant,
     c.tipo_cambio,
     (UPPER(c.cod_vs2_act) IN ('BO','PM','GA','PA','LV','GO')   -- boca nueva segmentable (MA, FA, PI, OT no se reevaluan)
@@ -91,8 +95,12 @@ scored AS (
       WHEN (NOT v_solo) AND b.min_diamante IS NOT NULL AND b.sum_ub_ajustada >= b.min_diamante THEN '0 Diamante'
       WHEN v_solo AND p.des_segmentacion_transaccional = '0 Diamante'
            AND b.cod_grupo_precio_dex_vs2 IN ({{ grupos_diamante }})                         THEN '0 Diamante'
+      WHEN v_cons AND b.sin_umbral THEN
+           IF(p.des_segmentacion_transaccional IS NOT NULL AND p.des_segmentacion_transaccional <> 'Sin asignar',
+              p.des_segmentacion_transaccional, 'Sin asignar')
       ELSE b.seg_regular
     END AS seg_nuevo,
+    (v_cons AND b.sin_umbral) AS sin_umbral_f,
     COALESCE(b.reeval_boca, FALSE) AS reeval_boca_f,
     p.des_segmentacion_transaccional AS seg_prev
   FROM base_scored b
@@ -130,7 +138,7 @@ SELECT
   CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
   s.seg_nuevo,
   IF(v_solo AND s.reeval_boca_f AND p.des_segmentacion_transaccional <> 'Sin asignar', 'Reevaluado cambio boca', 'Reevaluado'),
-  s.seg_regular,
+  IF(s.sin_umbral_f, s.seg_nuevo, s.seg_regular),
   IF(s.cod_grupo_precio_dex_vs2 IN ({{ grupos_diamante }}), 'DIAMANTE', NULL),
   CAST(NULL AS FLOAT64),
   s.cod_boca_ant, s.tipo_cambio
@@ -148,7 +156,7 @@ SELECT
   CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
   s.seg_nuevo,
   'Nuevo',
-  s.seg_regular,
+  IF(s.sin_umbral_f, s.seg_nuevo, s.seg_regular),
   IF(s.cod_grupo_precio_dex_vs2 IN ({{ grupos_diamante }}), 'DIAMANTE', NULL),
   CAST(NULL AS FLOAT64),
   s.cod_boca_ant, s.tipo_cambio
