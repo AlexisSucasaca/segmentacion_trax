@@ -24,8 +24,22 @@ INSERT INTO `{{ ds }}.seg_segmentacion`
    des_segmentacion_transaccional, origen,
    des_segmento_regular, grupo_diamante, percentil_diamante, cod_boca_ant, tipo_cambio_boca)
 WITH
+-- previa a cliente unico (nodo): una fila por cliente actual, con el mejor segmento (menor codigo; 'Sin asignar' al final)
 prev AS (
-  SELECT * FROM `{{ prev_tabla }}` WHERE fecha_corte = p_prev
+  SELECT * EXCEPT (rn)
+  FROM (
+    SELECT
+      p0.* REPLACE (COALESCE(mn.cod_cliente_dex_actual, p0.cod_cliente_dex) AS cod_cliente_dex),
+      ROW_NUMBER() OVER (
+        PARTITION BY COALESCE(mn.cod_cliente_dex_actual, p0.cod_cliente_dex)
+        ORDER BY IF(p0.des_segmentacion_transaccional = 'Sin asignar', 'Z', p0.des_segmentacion_transaccional),
+                 IF(mn.cod_cliente_dex IS NULL, 0, 1)) AS rn
+    FROM `{{ prev_tabla }}` p0
+    LEFT JOIN `{{ ds }}.seg_mapa_nodo` mn
+      ON mn.fecha_corte = p_corte AND mn.cod_cliente_dex = p0.cod_cliente_dex
+    WHERE p0.fecha_corte = p_prev
+  )
+  WHERE rn = 1
 ),
 nuevo AS (
   SELECT * FROM `{{ ds }}.seg_resumen_cliente` WHERE fecha_corte = p_corte

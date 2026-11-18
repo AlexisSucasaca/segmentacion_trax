@@ -33,27 +33,36 @@ CREATE TEMP TABLE ratios AS (
 -- Respaldo: SAP por cliente DEX segun la dimension al periodo del corte (cod_sucursal -> cod_cliente_actual)
 CREATE TEMP TABLE mapa_sap AS (
   SELECT
-    SAFE_CAST(a.cod_cliente_dex AS INT64) AS cod_cliente_dex,
+    COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(a.cod_cliente_dex AS INT64)) AS cod_cliente_dex,
     MIN(REGEXP_REPLACE(CAST(b.cod_cliente_actual AS STRING), r'\.0$', '')) AS sap_dim,
     COUNT(DISTINCT b.cod_cliente_actual) AS n_sap
   FROM `{{ src_cliente_dex_hist }}` a
   LEFT JOIN `{{ src_cliente_alicorp }}` b
     ON a.cod_sucursal = b.cod_sucursal
+  LEFT JOIN `{{ ds }}.seg_mapa_nodo` mn
+    ON mn.fecha_corte = p_corte AND mn.cod_cliente_dex = SAFE_CAST(a.cod_cliente_dex AS INT64)
   WHERE a.periodo = p_corte
   GROUP BY 1
+);
+
+-- Mapa de nodos: cada codigo se resuelve a su cliente unico (cod_cliente_dex_actual). Sin fila = el mismo codigo.
+CREATE TEMP TABLE mapa_nodo AS (
+  SELECT cod_cliente_dex, cod_cliente_dex_actual
+  FROM `{{ ds }}.seg_mapa_nodo` WHERE fecha_corte = p_corte
 );
 
 CREATE TEMP TABLE out_raw AS (
   SELECT
     periodo,
-    SAFE_CAST(cod_cliente_dex AS INT64) AS cod_cliente_dex,
+    COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(s.cod_cliente_dex AS INT64)) AS cod_cliente_dex,
     REGEXP_REPLACE(CAST(cod_cliente_alicorp_actual AS STRING), r'\.0$', '') AS sap_out,
     COALESCE(CAST(cod_familia   AS STRING), '<NULL>') AS fam,
     COALESCE(CAST(cod_categoria AS STRING), '<NULL>') AS cat,
     cod_grupo_precio_dex,
     des_grupo_precio_dex,
     SUM(mnt_venta_real_bruto) AS vb
-  FROM `{{ src_sellout }}`
+  FROM `{{ src_sellout }}` s
+  LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(s.cod_cliente_dex AS INT64)
   WHERE periodo >= p_ini AND periodo < p_corte
   GROUP BY 1, 2, 3, 4, 5, 6, 7
 );
@@ -84,11 +93,14 @@ CREATE TEMP TABLE grupo_src AS (
     GROUP BY cod_cliente_dex
   ),
   hist AS (
+    -- cliente unico: entre los codigos del nodo, primero el actual (si no esta, el de periodo mas reciente)
     SELECT
-      SAFE_CAST(cod_cliente_dex AS INT64) AS cod_cliente_dex,
-      ARRAY_AGG(cod_grupo_precio_dex IGNORE NULLS ORDER BY periodo DESC, cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)] AS cod
-    FROM `{{ src_cliente_dex_hist }}`
-    WHERE DATE_TRUNC(periodo, MONTH) = p_hist
+      COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(h0.cod_cliente_dex AS INT64)) AS cod_cliente_dex,
+      ARRAY_AGG(h0.cod_grupo_precio_dex IGNORE NULLS
+                ORDER BY IF(mn.cod_cliente_dex IS NULL, 0, 1), h0.periodo DESC, h0.cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)] AS cod
+    FROM `{{ src_cliente_dex_hist }}` h0
+    LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(h0.cod_cliente_dex AS INT64)
+    WHERE DATE_TRUNC(h0.periodo, MONTH) = p_hist
     GROUP BY 1
   )
   SELECT
@@ -107,17 +119,20 @@ CREATE TEMP TABLE grupo_src AS (
 CREATE TEMP TABLE out_clean AS (
   WITH
   activos AS (
-    SELECT DISTINCT SAFE_CAST(a.id_interlocutor_origen AS INT64) AS cod_cliente_dex
+    -- cliente unico activo si algun codigo de su nodo esta activo
+    SELECT DISTINCT COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(a.id_interlocutor_origen AS INT64)) AS cod_cliente_dex
     FROM `{{ src_cliente }}` a
     LEFT JOIN `{{ src_odoo }}` b
       ON a.id_interlocutor_origen = b.id_interlocutor_origen
+    LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(a.id_interlocutor_origen AS INT64)
     WHERE a.est_cliente = 'A' AND b.flg_activo = TRUE
   ),
   golosinero AS (
-    SELECT DISTINCT SAFE_CAST(id_interlocutor_origen AS INT64) AS cod_cliente_dex
-    FROM `{{ src_estrategica }}`
-    WHERE fecha_corte = p_corte
-      AND des_segmento_estrategico = 'Golosinera'
+    SELECT DISTINCT COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(e.id_interlocutor_origen AS INT64)) AS cod_cliente_dex
+    FROM `{{ src_estrategica }}` e
+    LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(e.id_interlocutor_origen AS INT64)
+    WHERE e.fecha_corte = p_corte
+      AND e.des_segmento_estrategico = 'Golosinera'
   ),
   con_grupo AS (
     SELECT

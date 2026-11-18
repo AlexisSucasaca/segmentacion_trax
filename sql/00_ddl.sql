@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS `{{ ds }}.seg_cambios_boca` (
 PARTITION BY fecha_corte
 CLUSTER BY cod_cliente_dex;
 
+-- Mapa de clientes unificados (cambio de razon social / de codigo) por corte. Lo llena el paso 00d.
+-- cod_cliente_dex_actual = llave unica del cliente en todo el pipeline.
+CREATE TABLE IF NOT EXISTS `{{ ds }}.seg_mapa_nodo` (
+  fecha_corte             DATE,
+  num_nodo                INT64,
+  cod_cliente_dex         INT64,
+  cod_cliente_dex_actual  INT64,
+  tip_clasificacion       STRING
+)
+PARTITION BY fecha_corte;
+
 -- Boca -> grupo vs2 (BO/MM/AB/Sin asignar se pliegan a BO; igual que el paso 02)
 CREATE OR REPLACE FUNCTION `{{ ds }}.fn_vs2`(cod STRING)
 RETURNS STRING AS (

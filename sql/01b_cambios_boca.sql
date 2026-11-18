@@ -23,13 +23,17 @@ INSERT INTO `{{ ds }}.seg_cambios_boca`
   (fecha_corte, cod_cliente_dex, mes_hist_ant, mes_hist_act, cod_boca_ant, cod_boca_act,
    cod_vs2_ant, cod_vs2_act, univ_ant, univ_act, tipo_cambio)
 WITH
+-- cliente unico (nodo): entre los codigos del nodo, primero el actual; asi un cambio de codigo no se cuenta como NUEVO / SIN_ACTUAL
 h AS (
   SELECT
-    SAFE_CAST(cod_cliente_dex AS INT64) AS cod_cliente_dex,
-    DATE_TRUNC(periodo, MONTH) AS mes,
-    ARRAY_AGG(cod_grupo_precio_dex IGNORE NULLS ORDER BY periodo DESC, cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)] AS cod
-  FROM `{{ src_cliente_dex_hist }}`
-  WHERE DATE_TRUNC(periodo, MONTH) IN (p_hist_ant, p_hist_act)
+    COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(h0.cod_cliente_dex AS INT64)) AS cod_cliente_dex,
+    DATE_TRUNC(h0.periodo, MONTH) AS mes,
+    ARRAY_AGG(h0.cod_grupo_precio_dex IGNORE NULLS
+              ORDER BY IF(mn.cod_cliente_dex IS NULL, 0, 1), h0.periodo DESC, h0.cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)] AS cod
+  FROM `{{ src_cliente_dex_hist }}` h0
+  LEFT JOIN `{{ ds }}.seg_mapa_nodo` mn
+    ON mn.fecha_corte = p_corte AND mn.cod_cliente_dex = SAFE_CAST(h0.cod_cliente_dex AS INT64)
+  WHERE DATE_TRUNC(h0.periodo, MONTH) IN (p_hist_ant, p_hist_act)
   GROUP BY 1, 2
 ),
 ant AS (SELECT cod_cliente_dex, cod FROM h WHERE mes = p_hist_ant AND cod_cliente_dex IS NOT NULL),

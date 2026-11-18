@@ -24,15 +24,25 @@ DECLARE p_hist  DATE DEFAULT DATE_SUB(p_corte, INTERVAL 1 MONTH);   -- ultimo me
 --   se agregan con cod_boca_salida derivado de su grupo de precio (vs2; GO -> BO) y segmento estrategico vacio.
 --   Regla validada contra la tabla estrategica: coincide en ~99.8% de los clientes que tienen ambos datos.
 
--- Segmento transaccional oficial por cliente (si hay varias bocas, el de menor codigo: 0 Diamante < ... < Por definir)
+-- Cliente unico (nodo): `dex` de todo este script = cod_cliente_dex_actual. cod_interlocutor conserva el codigo original,
+--   asi cada codigo del nodo mantiene su fila en la alterna con el segmento del cliente unificado.
+CREATE TEMP TABLE mapa_nodo AS (
+  SELECT cod_cliente_dex, cod_cliente_dex_actual
+  FROM `{{ ds }}.seg_mapa_nodo` WHERE fecha_corte = p_corte
+);
+
+-- Segmento transaccional oficial por cliente unico (si hay varias bocas, el de menor codigo: 0 Diamante < ... < Por definir)
 CREATE TEMP TABLE oficial_tx AS (
   SELECT dex, MIN(des_segmento_transaccional) AS tx
   FROM (
     SELECT
-      SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64) AS dex,
-      des_segmento_transaccional
-    FROM `{{ src_prev_oficial }}`
-    WHERE periodo = p_corte
+      COALESCE(mn.cod_cliente_dex_actual,
+               SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(o.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)) AS dex,
+      o.des_segmento_transaccional
+    FROM `{{ src_prev_oficial }}` o
+    LEFT JOIN mapa_nodo mn
+      ON mn.cod_cliente_dex = SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(o.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)
+    WHERE o.periodo = p_corte
   )
   WHERE dex IS NOT NULL
   GROUP BY dex
@@ -40,10 +50,12 @@ CREATE TEMP TABLE oficial_tx AS (
 
 CREATE TEMP TABLE boca_hist AS (
   SELECT
-    SAFE_CAST(cod_cliente_dex AS INT64) AS dex,
-    `{{ ds }}.fn_vs2`(ARRAY_AGG(cod_grupo_precio_dex IGNORE NULLS ORDER BY periodo DESC, cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)]) AS boca
-  FROM `{{ src_cliente_dex_hist }}`
-  WHERE v_bhist AND DATE_TRUNC(periodo, MONTH) = p_hist
+    COALESCE(mn.cod_cliente_dex_actual, SAFE_CAST(h0.cod_cliente_dex AS INT64)) AS dex,
+    `{{ ds }}.fn_vs2`(ARRAY_AGG(h0.cod_grupo_precio_dex IGNORE NULLS
+                                ORDER BY IF(mn.cod_cliente_dex IS NULL, 0, 1), h0.periodo DESC, h0.cod_grupo_precio_dex LIMIT 1)[SAFE_OFFSET(0)]) AS boca
+  FROM `{{ src_cliente_dex_hist }}` h0
+  LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = SAFE_CAST(h0.cod_cliente_dex AS INT64)
+  WHERE v_bhist AND DATE_TRUNC(h0.periodo, MONTH) = p_hist
   GROUP BY 1
 );
 
@@ -63,18 +75,22 @@ CREATE TEMP TABLE base AS (
     SELECT
       a.periodo, a.cod_interlocutor, a.cod_boca_salida,
       o.tx AS des_segmento_transaccional,
-      a.des_segmento_estrategica, a.dex,
+      a.des_segmento_estrategica, COALESCE(mn.cod_cliente_dex_actual, a.dex) AS dex,
       'estrategica' AS origen_base
     FROM ft0 a
-    LEFT JOIN oficial_tx o ON o.dex = a.dex
+    LEFT JOIN mapa_nodo mn ON mn.cod_cliente_dex = a.dex
+    LEFT JOIN oficial_tx o ON o.dex = COALESCE(mn.cod_cliente_dex_actual, a.dex)
   ),
   fo AS (
     SELECT
       y.periodo, y.cod_interlocutor, y.cod_boca_salida,
       y.des_segmento_transaccional, y.des_segmento_estrategica,
-      SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64) AS dex,
+      COALESCE(mn.cod_cliente_dex_actual,
+               SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)) AS dex,
       'oficial' AS origen_base
     FROM `{{ src_prev_oficial }}` y
+    LEFT JOIN mapa_nodo mn
+      ON mn.cod_cliente_dex = SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(y.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)
     WHERE v_comp AND y.periodo = p_corte
   ),
   fg AS (
