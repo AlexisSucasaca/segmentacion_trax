@@ -16,6 +16,11 @@ DECLARE v_resp  BOOL DEFAULT @respetar_diamante_base;
 DECLARE v_comp  BOOL DEFAULT @completar_con_oficial;
 DECLARE v_grupo BOOL DEFAULT @derivar_boca_por_grupo;
 DECLARE v_bhist BOOL DEFAULT @boca_desde_historico;
+DECLARE p_prev  DATE DEFAULT @p_prev;
+-- Periodo de la oficial usado como BASE (segmento de respaldo y lista de Diamante): el del corte si ya existe;
+--   si todavia no existe (el corte es mas nuevo que la oficial), el del corte previo. En ese caso no se completa con la oficial
+--   y los clientes sin segmento propio ni base quedan 'Por definir'.
+DECLARE p_base  DATE DEFAULT IF(EXISTS (SELECT 1 FROM `{{ src_prev_oficial }}` WHERE periodo = p_corte), p_corte, COALESCE(p_prev, p_corte));
 DECLARE p_hist  DATE DEFAULT DATE_SUB(p_corte, INTERVAL 1 MONTH);   -- ultimo mes de la ventana (igual que el paso 01)
 -- boca_desde_historico = TRUE: cod_boca_salida de las filas que vienen de la estrategica o de la oficial se REEMPLAZA por la boca
 --   de cr_cliente_dex_historico en p_hist (grupo vs2; GO/MM/AB/Sin asignar -> BO) cuando el cliente esta en el historico.
@@ -43,7 +48,7 @@ CREATE TEMP TABLE oficial_tx AS (
     FROM `{{ src_prev_oficial }}` o
     LEFT JOIN mapa_nodo mn
       ON mn.cod_cliente_dex = SAFE_CAST(NULLIF(REGEXP_REPLACE(SPLIT(CAST(o.cod_interlocutor AS STRING), '.')[OFFSET(0)], r'\D', ''), '') AS INT64)
-    WHERE o.periodo = p_corte
+    WHERE o.periodo = p_base
   )
   WHERE dex IS NOT NULL
   GROUP BY dex
@@ -150,7 +155,7 @@ SELECT
   CASE
     WHEN v_resp AND b.des_segmento_transaccional = '0 Diamante' THEN '0 Diamante'
     WHEN v_resp AND s.seg_tx = '0 Diamante'                     THEN b.des_segmento_transaccional
-    ELSE COALESCE(s.seg_tx, b.des_segmento_transaccional)
+    ELSE COALESCE(s.seg_tx, b.des_segmento_transaccional, IF(p_base <> p_corte, 'Por definir', NULL))
   END,
   b.des_segmento_estrategica
 FROM base b
@@ -158,6 +163,7 @@ LEFT JOIN seg s ON s.cod_cliente_dex = b.dex;
 
 SELECT
   COUNT(*)                                                    AS n_filas,
+  ANY_VALUE(p_base)                                           AS periodo_base_oficial,
   COUNTIF(s.cod_cliente_dex IS NULL)                          AS n_sin_segmentacion_interna,
   COUNTIF(s.seg_tx IS NOT NULL
           AND s.seg_tx <> IFNULL(b.des_segmento_transaccional, ''))   AS n_difiere_de_base,

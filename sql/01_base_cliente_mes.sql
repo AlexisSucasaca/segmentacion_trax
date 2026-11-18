@@ -109,6 +109,9 @@ CREATE TEMP TABLE grupo_src AS (
     u.sap_ult,
     u.g.cod AS cod_ult,
     h.cod   AS cod_hist,
+    -- boca del historico fuera de los grupos segmentables (MA, FA, PI, OT...): tampoco la rescata la marca de golosinero
+    (v_hist AND h.cod IS NOT NULL
+       AND UPPER(h.cod) NOT IN ('BO','MM','AB','SIN ASIGNAR','PM','GA','PA','LV','GO')) AS hist_fuera,
     IF(v_hist, COALESCE(h.cod, u.g.cod), u.g.cod) AS cod_final,
     IF(IF(v_hist, COALESCE(h.cod, u.g.cod), u.g.cod) = u.g.cod, u.g.des,
        COALESCE(d.des, h.cod)) AS des_final
@@ -142,8 +145,8 @@ CREATE TEMP TABLE out_clean AS (
       COALESCE(u.sap_ult, m.sap_dim) AS sap,
       o.fam,
       o.cat,
-      IF(gl.cod_cliente_dex IS NOT NULL, 'GO', u.cod_final) AS cod_grupo,
-      IF(gl.cod_cliente_dex IS NOT NULL, 'Golosinera',
+      IF(gl.cod_cliente_dex IS NOT NULL AND NOT u.hist_fuera, 'GO', u.cod_final) AS cod_grupo,
+      IF(gl.cod_cliente_dex IS NOT NULL AND NOT u.hist_fuera, 'Golosinera',
          IF(u.des_final = 'Puesto De Mercado', 'Puesto de mercado', u.des_final)) AS des_grupo,
       o.vb
     FROM out_raw o
